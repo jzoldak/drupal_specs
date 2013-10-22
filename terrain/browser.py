@@ -1,117 +1,136 @@
 """
-Browser set up for drupal acceptance tests
+Browser set up for lettuce acceptance tests
 """
-
-#pylint: disable=E1101
-#pylint: disable=W0613
-
 from lettuce import before, after, world
-from splinter.browser import Browser
-from logging import getLogger
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-from uuid import uuid4
+import logging
 import os
-from json import dumps
-from base64 import encodestring
-from requests import put
+from splinter.browser import Browser
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+from sauce_helpers import SauceRestApi
+from env_helpers import BrowserEnv
+
+LOGGER = logging.getLogger(__name__)
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+LOGGER.addHandler(ch)
+LOGGER.setLevel(logging.DEBUG)
+
+LOGGER.info("Loading the lettuce acceptance testing terrain module...")
+
+osenv = os.environ.copy()
+world.BASE_URL = osenv.get('BASE_URL', 'https://www.edx.org')
 
 
-LOGGER = getLogger(__name__)
-LOGGER.info("Loading the lettuce acceptance testing terrain file...")
-
-SAUCE_ENABLED = os.environ.get('SAUCE_ENABLED')
-SAUCE_USER = os.environ.get('SAUCE_USERNAME')
-SAUCE_API_KEY = os.environ.get('SAUCE_API_KEY')
-LOCAL_BROWSER_APP = os.environ.get('LOCAL_BROWSER', 'chrome')  # Used if running locally not in SauceLabs
-
-world.SAUCE_ENABLED = SAUCE_ENABLED
-world.BASE_URL = os.environ.get('BASE_URL')
-
-DESIRED_CAPABILITIES = {
-    'chrome': DesiredCapabilities.CHROME,
-    'internetexplorer': DesiredCapabilities.INTERNETEXPLORER,
-    'firefox': DesiredCapabilities.FIREFOX,
-    'opera': DesiredCapabilities.OPERA,
-    'iphone': DesiredCapabilities.IPHONE,
-    'ipad': DesiredCapabilities.IPAD,
-    'safari': DesiredCapabilities.SAFARI,
-    'android': DesiredCapabilities.ANDROID
-}
-
-# All keys must be URL and JSON encodable
-# PLATFORM-BROWSER-VERSION_NUM-DEVICE
-ALL_CONFIG = {
-    'Linux-chrome--': ['Linux', 'chrome', '', ''],
-    'Windows 8-chrome--': ['Windows 8', 'chrome', '', ''],
-    'Windows 7-chrome--': ['Windows 7', 'chrome', '', ''],
-    'Windows XP-chrome--': ['Windows XP', 'chrome', '', ''],
-    'OS X 10.8-chrome--': ['OS X 10.8', 'chrome', '', ''],
-    'OS X 10.6-chrome--': ['OS X 10.6', 'chrome', '', ''],
-
-    'Linux-firefox-23-': ['Linux', 'firefox', '23', ''],
-    'Windows 8-firefox-23-': ['Windows 8', 'firefox', '23', ''],
-    'Windows 7-firefox-23-': ['Windows 7', 'firefox', '23', ''],
-    'Windows XP-firefox-23-': ['Windows XP', 'firefox', '23', ''],
-
-    'OS X 10.8-safari-6-': ['OS X 10.8', 'safari', '6', ''],
-
-    'Windows 8-internetexplorer-10-': ['Windows 8', 'internetexplorer', '10', ''],
-}
-
-SAUCE_INFO = ALL_CONFIG.get(os.environ.get('SAUCE_INFO', 'Linux-chrome--'))
-
-def make_desired_capabilities():
+def make_desired_capabilities(env):
     """
-    Returns a DesiredCapabilities object corresponding to the environment sauce parameters
+    Compose and return a DesiredCapabilities object with the
+    browser attributes that you want.
     """
-    desired_capabilities = DESIRED_CAPABILITIES.get(SAUCE_INFO[1])
-    desired_capabilities['platform'] = SAUCE_INFO[0]
-    desired_capabilities['version'] = SAUCE_INFO[2]
-    desired_capabilities['device-type'] = SAUCE_INFO[3]
-    desired_capabilities['name'] = "Drupal Acceptance Test"
-    desired_capabilities['build'] = uuid4().hex  # HACK fix later.
-    desired_capabilities['video-upload-on-pass'] = False
-    desired_capabilities['sauce-advisor'] = False
-    desired_capabilities['record-screenshots'] = False
-    desired_capabilities['selenium-version'] = "2.34.0"
-    desired_capabilities['max-duration'] = 600
-    desired_capabilities['public'] = 'private'
+    # Figure out the starting desired capablilities from the browser choice.
+    # Note that this pulls in the defaults for browserName,
+    # version, platform, and javascriptEnabled from selenium.
+    desired_capabilities = {}
+    if env.selenium_browser == 'android':
+        desired_capabilities = DesiredCapabilities.ANDROID
+    elif env.selenium_browser == 'chrome':
+        desired_capabilities = DesiredCapabilities.CHROME
+    elif env.selenium_browser == 'firefox':
+        desired_capabilities = DesiredCapabilities.FIREFOX
+    elif env.selenium_browser == 'htmlunit':
+        desired_capabilities = DesiredCapabilities.HTMLUNIT
+    elif env.selenium_browser == 'iexplore':
+        desired_capabilities = DesiredCapabilities.INTERNETEXPLORER
+    elif env.selenium_browser == 'iphone':
+        desired_capabilities = DesiredCapabilities.IPHONE
+    else:
+        desired_capabilities = DesiredCapabilities.FIREFOX
+
+    if env.selenium_version:
+        desired_capabilities['version'] = env.selenium_version
+    if env.selenium_platform:
+        desired_capabilities['platform'] = env.selenium_platform
+
+    if env.run_on_saucelabs:
+        desired_capabilities['video-upload-on-pass'] = False
+        desired_capabilities['sauce-advisor'] = False
+        desired_capabilities['capture-html'] = True
+        desired_capabilities['record-screenshots'] = True
+        desired_capabilities['max-duration'] = 600
+        desired_capabilities['public'] = 'public restricted'
+        desired_capabilities['build'] = env.build_number
+        desired_capabilities['name'] = env.job_name
+
     return desired_capabilities
 
 
-def set_job_status(jobid, passed=True):
+def make_sauce_browser(env):
     """
-    Sets the job status on sauce labs
+    Start up the remote webdriver at SauceLabs.
+    This expects SauceConnect to be running.
     """
-    body_content = dumps({"passed": passed})
-    config = {'username': SAUCE_USER, 'access-key': SAUCE_API_KEY}
-    base64string = encodestring('{}:{}'.format(config['username'], config['access-key']))[:-1]
-    result = put('http://saucelabs.com/rest/v1/{}/jobs/{}'.format(config['username'], world.jobid),
-        data=body_content,
-        headers={"Authorization": "Basic {}".format(base64string)})
-    return result.status_code == 200
+    capabilities = make_desired_capabilities(env)
+    url = "http://{user}:{key}@{host}:{port}/wd/hub".format(
+        user=env.sauce_user_name,
+        key=env.sauce_api_key,
+        host=env.selenium_host,
+        port=env.selenium_port
+        )
+
+    return Browser('remote', url=url, **capabilities)
+
+
+def make_remote_browser(env):
+    """
+    Start up the remote webdriver.
+    """
+    capabilities = make_desired_capabilities(env)
+    url = "http://{host}:{port}/wd/hub".format(
+        host=env.selenium_host,
+        port=env.selenium_port
+        )
+
+    return Browser('remote', url=url, **capabilities)
+
+
+def make_local_browser(env):
+    """
+    Start up a local browser instance
+    """
+    return Browser(env.selenium_browser)
 
 
 @before.all
-def launch_browser():
+def setup_and_launch_browser():
     """
-    Launch the browser once before executing the tests.
+    Use the environment variables to determine the type of
+    browser we want, then launch the browser before executing the tests.
     """
-    if not SAUCE_ENABLED:
-        browser_driver = LOCAL_BROWSER_APP
-        world.browser = Browser(browser_driver)
-        world.browser.driver.set_window_size(1280, 1024)
+    env = BrowserEnv()
+
+    if env.run_on_saucelabs:
+        world.browser = make_sauce_browser(env)
+        env.session_id = world.browser.driver.session_id
+
+        # As part of the post build activities, the Sauce plugin will parse the test result files.
+        # It attempts to identify lines in the stdout or stderr that are in the following format:
+        # SauceOnDemandSessionID=<some session id> job-name=<some job name>
+        # so we need to output this to the console for jenkins to pick up.
+        print 'SauceOnDemandSessionID={} job-name={}'.format(env.session_id, env.job_name)
+
+    elif env.selenium_host and env.selenium_port:
+        world.browser = make_remote_browser(env)
 
     else:
-        world.browser = Browser(
-            'remote',
-            url="http://{}:{}@ondemand.saucelabs.com:80/wd/hub".format(
-                SAUCE_USER, SAUCE_API_KEY),
-            **make_desired_capabilities()
-        )
+        world.browser = make_local_browser(env)
 
-    world.absorb(world.browser.driver.session_id, 'jobid')
     world.browser.driver.implicitly_wait(30)
+
+    # Absorb the contents of the env object into world
+    # so it can be accessed later in the teardown.
+    world.absorb(env, 'env')
+
 
 @before.each_scenario
 def reset_data(scenario):
@@ -130,10 +149,13 @@ def clear_data(scenario):
 
 
 @after.all
-def teardown_browser(total):
+def teardown(total):
     """
-    Quit the browser after executing the tests.
+    Set the status at Sauce Labs and quit the browser.
     """
-    if SAUCE_ENABLED:
-        set_job_status(world.jobid, total.scenarios_ran == total.scenarios_passed)
+    if world.env.run_on_saucelabs:
+        result = bool(total.features_passed == total.features_ran)
+        sra = SauceRestApi(user=world.env.sauce_user_name, key=world.env.sauce_api_key)
+        sra.update_job(world.env.session_id, {'passed': result})
+
     world.browser.quit()

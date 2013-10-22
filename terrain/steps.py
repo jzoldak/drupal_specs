@@ -13,7 +13,7 @@
 
 from lettuce import world, step
 from .ui_helpers import *
-from nose.tools import assert_equals
+from nose.tools import assert_equal
 
 from logging import getLogger
 logger = getLogger(__name__)
@@ -37,7 +37,7 @@ def browser_back(step):
 @step('I (?:visit|access|open) the homepage$')
 def i_visit_the_homepage(step):
     world.visit('/')
-    assert world.is_css_present('div#page.page')
+    assert_equal(world.browser.title, 'edX')
 
 
 @step(u'I (?:visit|access|open) the course list page$')
@@ -64,7 +64,7 @@ def i_should_see_that_the_path_is(step, path):
 
 @step(u'the page title should be "([^"]*)"$')
 def the_page_title_should_be(step, title):
-    assert_equals(world.browser.title, title)
+    assert_equal(world.browser.title, title)
 
 
 @step(u'the page title should contain "([^"]*)"$')
@@ -84,7 +84,7 @@ def click_the_link_called(step, text):
 
 @step(r'should see that the url is "([^"]*)"$')
 def should_have_the_url(step, url):
-    assert_equals(world.browser.url, url)
+    assert_equal(world.browser.url, url)
 
 
 @step(r'should see (?:the|a) link (?:called|with the text) "([^"]*)"$')
@@ -96,14 +96,14 @@ def should_see_a_link_called(step, text):
 def should_have_link_with_id_and_text(step, link_id, text):
     link = world.browser.find_by_id(link_id)
     assert len(link) > 0
-    assert_equals(link.text, text)
+    assert_equal(link.text, text)
 
 
 @step(r'should see a link to "([^"]*)" with the text "([^"]*)"$')
 def should_have_link_with_path_and_text(step, path, text):
     link = world.browser.find_link_by_text(text)
     assert len(link) > 0
-    assert_equals(link.first["href"], 'TODO: fixme')
+    assert_equal(link.first["href"], 'TODO: fixme')
 
 
 @step(r'should( not)? see "(.*)" (?:somewhere|anywhere) (?:in|on) (?:the|this) page')
