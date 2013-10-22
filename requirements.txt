@@ -1,0 +1,4 @@
+lettuce
+splinter
+requests
+nose
